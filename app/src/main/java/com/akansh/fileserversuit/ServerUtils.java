@@ -12,11 +12,21 @@ import android.os.Environment;
 import android.util.Log;
 
 import com.akansh.t_history.HistoryItem;
+import com.bumptech.glide.Glide;
+import com.bumptech.glide.load.engine.DiskCacheStrategy;
+import com.bumptech.glide.request.target.Target;
+
+import org.nanohttpd.protocols.http.response.Response;
+import org.nanohttpd.protocols.http.response.Status;
+import static org.nanohttpd.protocols.http.response.Response.newFixedLengthResponse;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileReader;
+import java.io.InputStream;
 import java.text.DecimalFormat;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
@@ -25,9 +35,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
-
-import fi.iki.elonen.NanoHTTPD;
-import static fi.iki.elonen.NanoHTTPD.newFixedLengthResponse;
 
 public class ServerUtils {
     private final List<ApplicationInfo> packages;
@@ -57,10 +64,8 @@ public class ServerUtils {
         try {
             if (!utils.loadSetting(Constants.PRIVATE_MODE)) {
                 File f = new File(path);
-//                Log.d(Constants.LOG_TAG, "Files Path: " + f.getAbsolutePath());
                 if (f.exists()) {
                     File[] files = f.listFiles();
-//                    Log.d(Constants.LOG_TAG, "Files Length: " + files.length);
                     Collections.sort(Arrays.asList(files), new FilesComparator());
                     String name = "";
                     int len = 0;
@@ -87,7 +92,7 @@ public class ServerUtils {
                         if (files[i].isDirectory()) {
                             code.append("<i class=\"fa-solid fa-folder-closed\"></i>");
                         } else if (utils.getMimeType(files[i]).startsWith("image")) {
-                            code.append("<img height=\"50\" src=\"ShareX?action=thumbImage&location=").append(files[i].getAbsolutePath()).append("\"></img>");
+                            code.append("<img height=\"50\" loading=\"lazy\" src=\"ShareX?action=thumbImage&location=").append(files[i].getAbsolutePath()).append("\"></img>");
                         } else {
                             code.append(utils.getIconCode(files[i]));
                         }
@@ -136,10 +141,10 @@ public class ServerUtils {
                                 code.append("<label class=\"custom-control-label\" for=\"").append(fTemp.getAbsolutePath()).append("\"></label>");
                                 code.append("</div>");
                                 if (utils.getMimeType(pth).startsWith("image")) {
-                                    code.append("</td><td class=\"align-middle row-highlight ctxMenu ps-3\" data-ctxmap=\"").append(stripRoot(fTemp.getAbsolutePath())).append("\" onclick=\"viewFile_p(this.dataset.ctxmap)\">");
+                                    code.append("</td><td class=\"align-middle row-highlight ctxMenu ps-3\" data-ctxmap=\"").append(fTemp.getAbsolutePath()).append("\" onclick=\"viewFile_p(this.dataset.ctxmap)\">");
                                     code.append("<img height=\"50\" src=\"ShareX?action=thumbImage&location=").append(fTemp.getAbsolutePath()).append("\"></img>");
                                 } else {
-                                    code.append("</td><td class=\"align-middle row-highlight ctxMenu ps-3\" data-ctxmap=\"").append(stripRoot(fTemp.getAbsolutePath())).append("\" onclick=\"openFile_p(this.dataset.ctxmap)\">");
+                                    code.append("</td><td class=\"align-middle row-highlight ctxMenu ps-3\" data-ctxmap=\"").append(fTemp.getAbsolutePath()).append("\" onclick=\"openFile_p(this.dataset.ctxmap)\">");
                                     code.append(utils.getIconCode(fTemp));
                                 }
                                 code.append("&nbsp;&nbsp;");
@@ -164,48 +169,57 @@ public class ServerUtils {
                 }
             }
         }catch (Exception e) {
+            Log.d(Constants.LOG_TAG,"Error in getFilesListCode: "+e);
             code.append("<tr><td colspan=\"3\" class=\"align-middle\" style=\"text-align:center;\"><i class=\"fa-solid fa-triangle-exclamation\"></i>&nbsp;&nbsp;Can't read this location!</td></tr>");
         }
         return code.toString();
     }
 
     public String getAppsListCode() {
-        Comparator<ApplicationInfo> comparator= (obj1, obj2) -> packageManager.getApplicationLabel(obj1).toString().compareToIgnoreCase(packageManager.getApplicationLabel(obj2).toString());
-        Collections.sort(packages,comparator);
-        StringBuilder code=new StringBuilder();
-        IconUtils iconUtils=new IconUtils();
-        File base=new File(Environment.getExternalStorageDirectory(),"ShareX/.thumbs");
-        if(!base.exists()) {
-            base.mkdirs();
-        }
-        for (ApplicationInfo applicationInfo : packages) {
-            if(utils.isUserApp(applicationInfo)) {
-                String pkg = applicationInfo.packageName;
-                packageManager.getApplicationLogo(applicationInfo);
-                File dest = new File(base, pkg + ".png");
-                if (!dest.exists()) {
-                    Bitmap bm = iconUtils.drawableToBitmap(packageManager.getApplicationIcon(applicationInfo));
-                    iconUtils.writeBitmapToFile(bm, dest);
-                }
-                File apk = new File(applicationInfo.sourceDir);
-                String appName=packageManager.getApplicationLabel(applicationInfo).toString();
-                code.append("<tr>");
-                code.append("<td>");
-                code.append("<div class=\"d-flex\">");
-                code.append("<div class=\"ps-2 appInfo\">");
-                code.append("<img src=\"/ShareX/thumbnail/app/").append(pkg).append("\" class=\"app-icon\" />");
-                code.append("<div class=\"px-3\">");
-                code.append(appName);
-                code.append("<br><small>").append(pkg);
-                code.append("<br><b>Size: </b>");
-                code.append(fileSize(apk));
-                code.append("</small></div>");
-                code.append("</div>");
-                code.append("<div class=\"apk-dwl-btn pe-2\">");
-                code.append("<button class=\"btn btn-primary\" onclick=\"getApp('").append(pkg).append("');\"><i class=\"fas fa-download\"></i></button>");
-                code.append("</div></div>");
-                code.append("</tr>");
+        StringBuilder code = new StringBuilder();
+        if(utils.loadSetting(Constants.LOAD_APPS)) {
+            Comparator<ApplicationInfo> comparator = (obj1, obj2) -> packageManager.getApplicationLabel(obj1).toString().compareToIgnoreCase(packageManager.getApplicationLabel(obj2).toString());
+            Collections.sort(packages, comparator);
+            IconUtils iconUtils = new IconUtils();
+            File base = new File(Environment.getExternalStorageDirectory(), "ShareX/.thumbs");
+            if (!base.exists()) {
+                base.mkdirs();
             }
+            for (ApplicationInfo applicationInfo : packages) {
+                if (utils.isUserApp(applicationInfo)) {
+                    String pkg = applicationInfo.packageName;
+                    packageManager.getApplicationLogo(applicationInfo);
+                    File dest = new File(base, pkg + ".png");
+                    if (!dest.exists()) {
+                        Bitmap bm = iconUtils.drawableToBitmap(packageManager.getApplicationIcon(applicationInfo));
+                        iconUtils.writeBitmapToFile(bm, dest);
+                    }
+                    File apk = new File(applicationInfo.sourceDir);
+                    String appName = packageManager.getApplicationLabel(applicationInfo).toString();
+                    code.append("<tr>");
+                    code.append("<td>");
+                    code.append("<div class=\"d-flex\">");
+                    code.append("<div class=\"ps-2 appInfo\">");
+                    code.append("<img src=\"/ShareX/thumbnail/app/").append(pkg).append("\" class=\"app-icon\" />");
+                    code.append("<div class=\"px-3\">");
+                    code.append(appName);
+                    code.append("<br><small>").append(pkg);
+                    code.append("<br><b>Size: </b>");
+                    code.append(fileSize(apk));
+                    code.append("</small></div>");
+                    code.append("</div>");
+                    code.append("<div class=\"apk-dwl-btn pe-2\">");
+                    code.append("<button class=\"btn btn-primary\" onclick=\"getApp('").append(pkg).append("');\"><i class=\"fas fa-download\"></i></button>");
+                    code.append("</div></div>");
+                    code.append("</tr>");
+                }
+            }
+        }else{
+            code.append("<tr>");
+            code.append("<td>");
+            code.append("<div style=\"display: flex;\" class=\"my-3 justify-content-center align-items-center\"><i class=\"fa-solid fa-ban\"></i>&nbsp;Apps Access Denied!</div>");
+            code.append("</td>");
+            code.append("</tr>");
         }
         return code.toString();
     }
@@ -235,8 +249,51 @@ public class ServerUtils {
         return output;
     }
 
-    public NanoHTTPD.Response serveFile(String path,boolean pushHistory,String rangeHeader) {
-        NanoHTTPD.Response response;
+    public long[] calculateRange(long fileLength, String rangeHeader) {
+        String rangeValue = rangeHeader.trim().substring("bytes=".length());
+        long start, end;
+        if (rangeValue.startsWith("-")) {
+            end = fileLength - 1;
+            start = fileLength - 1
+                    - Long.parseLong(rangeValue.substring("-".length()));
+        } else {
+            String[] range = rangeValue.split("-");
+            start = Long.parseLong(range[0]);
+            end = range.length > 1 ? Long.parseLong(range[1])
+                    : fileLength - 1;
+        }
+        if (end > fileLength - 1) {
+            end = fileLength - 1;
+        }
+        return new long[]{start,end};
+    }
+
+    public Response serveThumbnail(String path) {
+        Response response;
+        try {
+            int thumbnailSize = 100;
+            Bitmap thumbnail = Glide.with(this.ctx)
+                    .asBitmap()
+                    .load(path)
+                    .centerCrop()
+                    .diskCacheStrategy(DiskCacheStrategy.ALL)
+                    .override(thumbnailSize, thumbnailSize)
+                    .submit(Target.SIZE_ORIGINAL, Target.SIZE_ORIGINAL)
+                    .get();
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            thumbnail.compress(Bitmap.CompressFormat.JPEG, 100, baos);
+            InputStream is = new ByteArrayInputStream(baos.toByteArray());
+            int fileLength = is.available();
+            ProgressInputStream pis = new ProgressInputStream(is, fileLength);
+            response = newFixedLengthResponse(Status.OK, "image/jpeg", pis, fileLength);
+            return response;
+        }catch (Exception e) {
+            return newFixedLengthResponse(e.getMessage());
+        }
+    }
+
+    public Response serveFile(String path, boolean pushHistory, String rangeHeader) {
+        Response response;
         try {
             if(utils.loadSetting(Constants.PRIVATE_MODE)) {
                 File f=new File(path);
@@ -249,16 +306,16 @@ public class ServerUtils {
             if(m==null) {
                 m = "";
             }
+            long b = utils.getTotalBytes(path);
+            FileInputStream fis = new FileInputStream(path);
             if(rangeHeader==null) {
-                long b = utils.getTotalBytes(path);
-                FileInputStream fis = new FileInputStream(path);
                 ProgressInputStream pis = new ProgressInputStream(fis, (int) b);
                 pis.addListener(percent -> {
                     if (sendProgressListener != null) {
                         sendProgressListener.onProgressUpdate((int) percent);
                     }
                 });
-                response = newFixedLengthResponse(NanoHTTPD.Response.Status.OK, m, pis, b);
+                response = newFixedLengthResponse(Status.OK, m, pis, b);
                 if (pushHistory) {
                     Calendar c = Calendar.getInstance();
                     SimpleDateFormat df = new SimpleDateFormat("dd/MM/yyyy", Locale.ENGLISH);
@@ -266,50 +323,34 @@ public class ServerUtils {
                     updateTransferHistoryListener.onUpdateTransferHistory(new HistoryItem(Constants.ITEM_TYPE_SENT, name, fileSize(new File(path)), df.format(c.getTime()), tf.format(c.getTime()), m, new File(path).getAbsolutePath()));
                 }
             }else{
-                String rangeValue = rangeHeader.trim().substring("bytes=".length());
                 long fileLength = utils.getTotalBytes(path);
-                long start, end;
-                if (rangeValue.startsWith("-")) {
-                    end = fileLength - 1;
-                    start = fileLength - 1
-                            - Long.parseLong(rangeValue.substring("-".length()));
-                } else {
-                    String[] range = rangeValue.split("-");
-                    start = Long.parseLong(range[0]);
-                    end = range.length > 1 ? Long.parseLong(range[1])
-                            : fileLength - 1;
-                }
-                if (end > fileLength - 1) {
-                    end = fileLength - 1;
-                }
-                if (start <= end) {
-                    long contentLength = end - start + 1;
-                    FileInputStream fis = new FileInputStream(path);
-                    fis.skip(start);
+                long[] ranges = calculateRange(fileLength, rangeHeader);
+                if (ranges[0] <= ranges[1]) {
+                    long contentLength = ranges[1] - ranges[0] + 1;
+                    fis.skip(ranges[0]);
                     ProgressInputStream pis = new ProgressInputStream(fis, (int) fileLength);
-                    pis.addListener(new ProgressInputStream.ProgressListener() {
-                        @Override
-                        public void process(double percent) {
-                            if (sendProgressListener != null) {
-                                sendProgressListener.onProgressUpdate((int) percent);
-                            }
+                    pis.addListener(percent -> {
+                        if (sendProgressListener != null) {
+                            sendProgressListener.onProgressUpdate((int) percent);
                         }
                     });
-                    response = newFixedLengthResponse(NanoHTTPD.Response.Status.PARTIAL_CONTENT, m, pis,fileLength);
+                    response = newFixedLengthResponse(Status.PARTIAL_CONTENT, m, pis,fileLength);
                     response.addHeader("Content-Length", contentLength + "");
-                    response.addHeader("Content-Range", "bytes " + start + "-" + end + "/" + fileLength);
+                    response.addHeader("Content-Range", "bytes " + ranges[0] + "-" + ranges[1] + "/" + fileLength);
+
                 } else {
-                    response = newFixedLengthResponse(NanoHTTPD.Response.Status.RANGE_NOT_SATISFIABLE, m, rangeHeader);
+                    response = newFixedLengthResponse(Status.RANGE_NOT_SATISFIABLE, m, rangeHeader);
                 }
             }
             if(m.startsWith("image") || m.startsWith("video") || name.endsWith("pdf")) {
                 response.addHeader("Content-Disposition", "inline; filename=\"" + name + "\"");
                 response.addHeader("Content-Transfer-Encoding","binary");
                 response.addHeader("Accept-Ranges","bytes");
+                response.addHeader("Content-type", m);
             }else{
                 response.addHeader("Accept-Ranges","bytes");
                 response.addHeader("Content-type","application/octet-stream");
-                response.addHeader("Content-Disposition", "inline; filename=\"" + name + "\"");
+                response.addHeader("Content-Disposition", "attachment; filename=\"" + name + "\"");
             }
             return response;
         }catch (Exception e) {
@@ -317,8 +358,8 @@ public class ServerUtils {
         }
     }
 
-    public NanoHTTPD.Response downloadFile(String path,boolean pCheck,boolean pushHistory,String rangeHeader) {
-        NanoHTTPD.Response response;
+    public Response downloadFile(String path,boolean pCheck,boolean pushHistory,String rangeHeader) {
+        Response response;
         try {
             if(pCheck) {
                 if (utils.loadSetting(Constants.PRIVATE_MODE)) {
@@ -338,7 +379,7 @@ public class ServerUtils {
                         sendProgressListener.onProgressUpdate((int) percent);
                     }
                 });
-                response = newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "application/octet-stream", pis, b);
+                response = newFixedLengthResponse(Status.OK, "application/octet-stream", pis, b);
                 if (pushHistory) {
                     Calendar c = Calendar.getInstance();
                     SimpleDateFormat df = new SimpleDateFormat("dd/MM/yyyy", Locale.ENGLISH);
@@ -346,41 +387,27 @@ public class ServerUtils {
                     updateTransferHistoryListener.onUpdateTransferHistory(new HistoryItem(Constants.ITEM_TYPE_SENT, name, fileSize(new File(path)), df.format(c.getTime()), tf.format(c.getTime()), utils.getMimeType(new File(path)), new File(path).getAbsolutePath()));
                 }
             }else{
-                String rangeValue = rangeHeader.trim().substring("bytes=".length());
                 long fileLength = utils.getTotalBytes(path);
-                long start, end;
-                if (rangeValue.startsWith("-")) {
-                    end = fileLength - 1;
-                    start = fileLength - 1
-                            - Long.parseLong(rangeValue.substring("-".length()));
-                } else {
-                    String[] range = rangeValue.split("-");
-                    start = Long.parseLong(range[0]);
-                    end = range.length > 1 ? Long.parseLong(range[1])
-                            : fileLength - 1;
-                }
-                if (end > fileLength - 1) {
-                    end = fileLength - 1;
-                }
-                if (start <= end) {
-                    long contentLength = end - start + 1;
+                long[] ranges = calculateRange(fileLength, rangeHeader);
+                if (ranges[0] <= ranges[1]) {
+                    long contentLength = ranges[1] - ranges[0] + 1;
                     FileInputStream fis = new FileInputStream(path);
-                    fis.skip(start);
+                    fis.skip(ranges[0]);
                     ProgressInputStream pis = new ProgressInputStream(fis, (int) fileLength);
                     pis.addListener(percent -> {
                         if (sendProgressListener != null) {
                             sendProgressListener.onProgressUpdate((int) percent);
                         }
                     });
-                    response = newFixedLengthResponse(NanoHTTPD.Response.Status.PARTIAL_CONTENT,"application/octet-stream", pis,fileLength);
+                    response = newFixedLengthResponse(Status.PARTIAL_CONTENT, "application/octet-stream", pis,fileLength);
                     response.addHeader("Content-Length", contentLength + "");
-                    response.addHeader("Content-Range", "bytes " + start + "-" + end + "/" + fileLength);
+                    response.addHeader("Content-Range", "bytes " + ranges[0] + "-" + ranges[1] + "/" + fileLength);
                 } else {
-                    response = newFixedLengthResponse(NanoHTTPD.Response.Status.RANGE_NOT_SATISFIABLE,"application/octet-stream", rangeHeader);
+                    response = newFixedLengthResponse(Status.RANGE_NOT_SATISFIABLE, "application/octet-stream", rangeHeader);
                 }
             }
-            response.addHeader("Content-type","application/octet-stream");
-            response.addHeader("Content-Disposition", "inline; filename=\"" + name + "\"");
+            response.addHeader("Content-type", "application/octet-stream");
+            response.addHeader("Content-Disposition", "attachment; filename=\"" + name + "\"");
             response.addHeader("Content-Transfer-Encoding","binary");
             response.addHeader("Accept-Ranges","bytes");
             return response;
@@ -389,13 +416,16 @@ public class ServerUtils {
         }
     }
 
-    public NanoHTTPD.Response serveApp(String name,String path,String pkg) {
-        NanoHTTPD.Response response;
+    public Response serveApp(String name,String path,String pkg) {
+        if(!utils.loadSetting(Constants.LOAD_APPS)) {
+            return newFixedLengthResponse("Access Denied!");
+        }
+        Response response;
         try {
             FileInputStream str = new FileInputStream(path);
             Utils utils = new Utils(ctx);
             long b = utils.getTotalBytes(path);
-            response = newFixedLengthResponse(NanoHTTPD.Response.Status.OK,"application/vnd.android.package-archive", str, b);
+            response = newFixedLengthResponse(Status.OK,"application/vnd.android.package-archive", str, b);
             response.addHeader("Content-Disposition", "attachment; filename=\"" + name + "\"");
             Calendar c = Calendar.getInstance();
             SimpleDateFormat df = new SimpleDateFormat("dd/MM/yyyy", Locale.ENGLISH);
@@ -409,7 +439,7 @@ public class ServerUtils {
 
     public void sendLog(String action,String key,String value) {
         Intent local = new Intent();
-        local.setAction("service.to.activity.transfer");
+        local.setAction(Constants.BROADCAST_SERVICE_TO_ACTIVITY);
         local.putExtra("action",action);
         local.putExtra(key,value);
         ctx.sendBroadcast(local);
@@ -445,10 +475,6 @@ public class ServerUtils {
         return "-;-;transparent";
     }
 
-    private String stripRoot(String path) {
-        return path.replace(Environment.getExternalStorageDirectory().toString(),"");
-    }
-
     @SuppressLint("SdCardPath")
     public boolean isInPrivateFiles(String path) {
         try {
@@ -468,7 +494,7 @@ public class ServerUtils {
             br.close();
             fr.close();
         }catch (Exception e) {
-            Log.d(Constants.LOG_TAG,"Error is_in_p_func: "+e.toString());
+            Log.d(Constants.LOG_TAG,"Error is_in_p_func: "+e);
             return false;
         }
         return false;

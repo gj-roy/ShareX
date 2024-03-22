@@ -15,6 +15,7 @@ import android.provider.MediaStore;
 import android.text.Spannable;
 import android.text.SpannableString;
 import android.text.style.RelativeSizeSpan;
+import android.util.Log;
 import android.webkit.MimeTypeMap;
 
 import androidx.core.content.FileProvider;
@@ -23,6 +24,7 @@ import androidx.core.content.res.ResourcesCompat;
 import java.io.File;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
+import java.net.URLDecoder;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -161,11 +163,27 @@ public class Utils {
 
     public boolean loadSetting(String constant) {
         boolean def = false;
-        if (constant.equals(Constants.FORCE_DOWNLOAD) || constant.equals(Constants.IS_LOGGER_VISIBLE) || constant.equals(Constants.RESTRICT_MODIFY)) {
+        if (
+                constant.equals(Constants.FORCE_DOWNLOAD) ||
+                constant.equals(Constants.IS_LOGGER_VISIBLE) ||
+                constant.equals(Constants.RESTRICT_MODIFY) ||
+                constant.equals(Constants.LOAD_APPS)
+        ) {
             def = true;
         }
         SharedPreferences sharedPrefs = ctx.getSharedPreferences(ctx.getPackageName(), MODE_PRIVATE);
         return sharedPrefs.getBoolean(constant, def);
+    }
+
+    public void saveStorage(String path) {
+        SharedPreferences.Editor editor = ctx.getSharedPreferences(ctx.getPackageName(), MODE_PRIVATE).edit();
+        editor.putString("SERVER_STORAGE", path);
+        editor.apply();
+    }
+
+    public String loadStorage() {
+        SharedPreferences sharedPrefs = ctx.getSharedPreferences(ctx.getPackageName(), MODE_PRIVATE);
+        return sharedPrefs.getString("SERVER_STORAGE", Environment.getExternalStorageDirectory().getAbsolutePath());
     }
 
     public void saveRoot(String path) {
@@ -238,7 +256,7 @@ public class Utils {
             } else {
                 uri = Uri.fromFile(f);
             }
-            String mimeType = null;
+            String mimeType;
             if (uri.getScheme().equals(ContentResolver.SCHEME_CONTENT)) {
                 ContentResolver cr = ctx.getContentResolver();
                 mimeType = cr.getType(uri);
@@ -246,9 +264,12 @@ public class Utils {
                 String fileExtension = MimeTypeMap.getFileExtensionFromUrl(uri.toString());
                 mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(fileExtension.toLowerCase());
             }
+            if(mimeType == null || mimeType.equals("")) {
+                return "application/octet-stream";
+            }
             return mimeType;
         } catch (Exception e) {
-            return null;
+            return "application/octet-stream";
         }
     }
 
@@ -304,14 +325,6 @@ public class Utils {
         return path;
     }
 
-    public List<String> uriListResolve(List<Uri> uriList) {
-        List<String> paths = new ArrayList<>();
-        for (Uri uri : uriList) {
-            paths.add(UriResolver.getUriRealPath(uri, ctx));
-        }
-        return paths;
-    }
-
     public void verifyImage(File file) {
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inJustDecodeBounds = true;
@@ -344,6 +357,63 @@ public class Utils {
         values.put(MediaStore.Video.Media.DATA, file.getAbsolutePath());
         ContentResolver cr = ctx.getContentResolver();
         cr.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values);
+    }
+
+    public boolean isExternalStorageMounted() {
+        return getSDCardRoot() != null;
+    }
+
+    public String getSDCardRoot() {
+        File[] filesDirs = ctx.getExternalFilesDirs(null);
+        for (File filesDir : filesDirs) {
+            if (filesDir != null) {
+                if(!filesDir.getAbsolutePath().contains("emulated")) {
+                    String path = filesDir.getAbsolutePath();
+                    int startIndex = path.indexOf("/storage/") + "/storage/".length();
+                    int endIndex = path.indexOf("/", startIndex);
+                    if (endIndex != -1) {
+                        return path.substring(0, endIndex);
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    public String filePickerUriResolve(Uri uri) {
+        try {
+            String decode = URLDecoder.decode(uri.toString(), "UTF-8");
+            if (decode.split(":").length < 3) {
+                if (decode.contains("/storage/") && decode.contains("raw/")) {
+                    String path = decode.split("raw/")[1];
+                    if(path != null && path.length() > 1) {
+                        return path;
+                    }
+                }
+            } else {
+                if (!decode.split(":")[2].matches("-?\\d+(\\.\\d+)?")) {
+                    String storage;
+                    if (decode.split(":")[1].contains("primary")) {
+                        storage = Environment.getExternalStorageDirectory().getAbsolutePath();
+                    } else {
+                        storage = getSDCardRoot();
+                    }
+                    File f = new File(storage, decode.split(":")[2]);
+                    return f.getAbsolutePath();
+                } else {
+                    String path = UriResolverUtil.getPath(ctx, uri);
+                    if(path == null) {
+                        Log.d(Constants.LOG_TAG, "Unresolved: " + decode);
+                    }
+                    if(path != null && path.length() > 1 && path.contains("storage")) {
+                        return path;
+                    }
+                }
+            }
+            return null;
+        }catch (Exception e) {
+            return null;
+        }
     }
 
 }

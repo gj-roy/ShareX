@@ -22,8 +22,13 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
-import fi.iki.elonen.NanoFileUpload;
-import fi.iki.elonen.NanoHTTPD;
+import org.nanohttpd.fileupload.NanoFileUpload;
+import org.nanohttpd.protocols.http.IHTTPSession;
+import org.nanohttpd.protocols.http.NanoHTTPD;
+import org.nanohttpd.protocols.http.response.Response;
+import org.nanohttpd.protocols.http.response.Status;
+import static org.nanohttpd.protocols.http.response.Response.newFixedLengthResponse;
+
 
 public class WebServer extends NanoHTTPD {
 
@@ -49,7 +54,7 @@ public class WebServer extends NanoHTTPD {
 
         serverUtils.setSendProgressListener(progress -> {
             Intent local = new Intent();
-            local.setAction("service.to.activity.transfer");
+            local.setAction(Constants.BROADCAST_SERVICE_TO_ACTIVITY);
             local.putExtra("action",Constants.ACTION_PROGRESS);
             local.putExtra("value",progress);
             ctx.sendBroadcast(local);
@@ -66,7 +71,7 @@ public class WebServer extends NanoHTTPD {
     }
 
     @Override
-    public Response serve(IHTTPSession session) {
+    public Response handle(IHTTPSession session) {
         try {
             String range=null;
             for(String key : session.getHeaders().keySet()) {
@@ -84,20 +89,32 @@ public class WebServer extends NanoHTTPD {
                     c_parent = loc;
                     return newFixedLengthResponse(serverUtils.getFilesListCode(root + loc, allowHiddenMedia));
                 }else if(action.equals("openFile")){
-                    String loc = root + Objects.requireNonNull(params.get("location")).get(0);
+                    String loc;
+                    if(!utils.loadSetting(Constants.PRIVATE_MODE)) {
+                        loc = root + Objects.requireNonNull(params.get("location")).get(0);
+                    }else{
+                        loc = Objects.requireNonNull(params.get("location")).get(0);
+                    }
                     File f=new File(loc);
-                    sendLog("msg","msg","Sending file: "+f.getName());
+                    if(range == null) {
+                        sendLog("msg", "msg", "Sending file: " + f.getName());
+                    }
                     if(utils.loadSetting(Constants.FORCE_DOWNLOAD)) {
                         return serverUtils.downloadFile(loc,true,true,range);
                     }else{
                         return serverUtils.serveFile(loc,true,range);
                     }
                 }else if(action.equals("viewImage")) {
-                    String loc=root+ Objects.requireNonNull(params.get("location")).get(0);
+                    String loc;
+                    if(!utils.loadSetting(Constants.PRIVATE_MODE)) {
+                        loc = root + Objects.requireNonNull(params.get("location")).get(0);
+                    }else{
+                        loc = Objects.requireNonNull(params.get("location")).get(0);
+                    }
                     return serverUtils.serveFile(loc,false,range);
                 }else if(action.equals("thumbImage")) {
-                    String loc= Objects.requireNonNull(params.get("location")).get(0);
-                    return serverUtils.serveFile(loc,false,range);
+                    String loc = Objects.requireNonNull(params.get("location")).get(0);
+                    return serverUtils.serveThumbnail(loc);
                 }else if(action.equals("delFiles")) {
                     if(!utils.loadSetting(Constants.RESTRICT_MODIFY) && !utils.loadSetting(Constants.PRIVATE_MODE)) {
                         JSONArray jsonArray = new JSONArray(Objects.requireNonNull(params.get("data")).get(0));
@@ -213,7 +230,7 @@ public class WebServer extends NanoHTTPD {
                         return newFixedLengthResponse("true");
                     }else if(deviceManager.isDeviceDenied(device_id)){
                         return newFixedLengthResponse("denied");
-                    }else {
+                    }else{
                         sendLog(Constants.ACTION_AUTH, "device_id", device_id);
                         return newFixedLengthResponse("false");
                     }
@@ -284,7 +301,7 @@ public class WebServer extends NanoHTTPD {
                     FileInputStream fis = new FileInputStream(iconP);
                     String mime = utils.getMimeType(iconP.getAbsolutePath());
                     long bytes = utils.getTotalBytes(iconP.getAbsolutePath());
-                    return newFixedLengthResponse(Response.Status.OK, mime, fis, bytes);
+                    return newFixedLengthResponse(Status.OK, mime, fis, bytes);
                 }else{
                     return newFixedLengthResponse("");
                 }
@@ -300,7 +317,7 @@ public class WebServer extends NanoHTTPD {
                 FileInputStream fis=new FileInputStream(path);
                 String mime = utils.getMimeType(path);
                 long bytes = utils.getTotalBytes(path);
-                return newFixedLengthResponse(Response.Status.OK,mime,fis,bytes);
+                return newFixedLengthResponse(Status.OK,mime,fis,bytes);
             }
         } catch (Exception e) {
             return newFixedLengthResponse("Error Occured: "+e.getMessage());
@@ -309,7 +326,7 @@ public class WebServer extends NanoHTTPD {
 
     public void sendLog(String action,String key,String value) {
         Intent local = new Intent();
-        local.setAction("service.to.activity.transfer");
+        local.setAction(Constants.BROADCAST_SERVICE_TO_ACTIVITY);
         local.putExtra("action",action);
         local.putExtra(key,value);
         ctx.sendBroadcast(local);

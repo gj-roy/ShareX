@@ -10,7 +10,6 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.IBinder;
-import android.util.Log;
 import android.widget.Toast;
 
 import androidx.annotation.Nullable;
@@ -75,7 +74,7 @@ public class ServerService extends Service {
 
     public void sendLog(String action,String key,String value) {
         Intent local = new Intent();
-        local.setAction("service.to.activity.transfer");
+        local.setAction(Constants.BROADCAST_SERVICE_TO_ACTIVITY);
         local.putExtra("action",action);
         local.putExtra(key,value);
         context.sendBroadcast(local);
@@ -100,7 +99,7 @@ public class ServerService extends Service {
                     getApplicationContext(),
                     0,
                     showTaskIntent,
-                    PendingIntent.FLAG_CANCEL_CURRENT);
+                    PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         }
 
         // Stop Service Intent
@@ -118,8 +117,8 @@ public class ServerService extends Service {
 
 
         if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            String NOTIFICATION_CHANNEL_ID = "com.akansh.fileserversuit";
-            String channelName = "ShareX";
+            String NOTIFICATION_CHANNEL_ID = getPackageName();
+            String channelName = getString(R.string.app_name);
             NotificationChannel chan = new NotificationChannel(NOTIFICATION_CHANNEL_ID, channelName, NotificationManager.IMPORTANCE_HIGH);
             chan.setLightColor(Color.BLUE);
             chan.setLockscreenVisibility(Notification.VISIBILITY_PRIVATE);

@@ -13,7 +13,6 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
@@ -24,14 +23,13 @@ import android.net.Uri;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
-import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.PowerManager;
+import android.provider.MediaStore;
 import android.provider.Settings;
-import android.text.Html;
 import android.text.InputType;
 import android.text.method.ScrollingMovementMethod;
 import android.util.Log;
@@ -54,14 +52,13 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.cardview.widget.CardView;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import androidx.core.graphics.drawable.RoundedBitmapDrawable;
 import androidx.core.graphics.drawable.RoundedBitmapDrawableFactory;
 import androidx.core.view.GravityCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
 
-import com.developer.filepicker.model.DialogConfigs;
-import com.developer.filepicker.model.DialogProperties;
-import com.developer.filepicker.view.FilePickerDialog;
+import com.bumptech.glide.Glide;
 import com.dlazaro66.qrcodereaderview.QRCodeReaderView;
 import com.github.sumimakito.awesomeqr.AwesomeQrRenderer;
 import com.github.sumimakito.awesomeqr.RenderResult;
@@ -72,17 +69,16 @@ import com.google.android.material.navigation.NavigationView;
 import com.google.android.material.snackbar.Snackbar;
 import com.google.android.material.textfield.TextInputLayout;
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
-import com.zhihu.matisse.Matisse;
-import com.zhihu.matisse.MimeType;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.net.URLDecoder;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -117,9 +113,11 @@ public class MainActivity extends AppCompatActivity {
     ActivityResultLauncher<Intent> storagePermissionResultLauncher;
     ActivityResultLauncher<Intent> folderPickerResultLauncher;
     ActivityResultLauncher<Intent> batteryActivityResultLauncher;
+    ActivityResultLauncher<Intent> mutipleFilesActivityResultLauncher;
+    ActivityResultLauncher<Intent> gallerySelectorActivityResultLauncher;
 
     int exit = 0;
-    int currentTheme;
+    int currentTheme, storageChoice = 0;
     boolean requestingStorage = false;
 
     @Override
@@ -182,7 +180,12 @@ public class MainActivity extends AppCompatActivity {
                 try {
                     Uri uri = result.getData().getData();
                     String decode = URLDecoder.decode(uri.toString(), "UTF-8");
-                    File f = new File(Environment.getExternalStorageDirectory(),decode.split(":")[2]);
+                    if(decode.split(":")[1].contains("primary")) {
+                        utils.saveStorage(Environment.getExternalStorageDirectory().getAbsolutePath());
+                    }else{
+                        utils.saveStorage(utils.getSDCardRoot());
+                    }
+                    File f = new File(utils.loadRoot(),decode.split(":")[2]);
                     serverRoot = f.getAbsolutePath();
                     utils.saveRoot(serverRoot);
                     pushLog("Server root changed to " + serverRoot, true);
@@ -190,6 +193,55 @@ public class MainActivity extends AppCompatActivity {
                     restartServer();
                 }catch (Exception e) {
                     Log.d(Constants.LOG_TAG,"Err2: "+e);
+                }
+            }
+        });
+
+        mutipleFilesActivityResultLauncher = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+            if(result.getResultCode() == Activity.RESULT_OK && result.getData() != null) {
+                Intent data = result.getData();
+                if (data.getClipData() != null) {
+                    int count = data.getClipData().getItemCount();
+                    for (int i = 0; i < count; i++) {
+                        Uri uri = data.getClipData().getItemAt(i).getUri();
+                        String path = utils.filePickerUriResolve(uri);
+                        if(path != null) {
+                            pmode_send_files.add(path);
+                        }
+                    }
+                    mergeAndUpdatePFilesList();
+                }else if(data.getData() != null){
+                    Uri uri = data.getData();
+                    String path = utils.filePickerUriResolve(uri);
+                    if(path != null) {
+                        pmode_send_files.add(path);
+                    }
+                    mergeAndUpdatePFilesList();
+                }
+            }
+        });
+
+        gallerySelectorActivityResultLauncher = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+            if (result.getResultCode() == Activity.RESULT_OK && result.getData() != null) {
+                Intent data = result.getData();
+
+                if (data.getClipData() != null) {
+                    int count = data.getClipData().getItemCount();
+                    for (int i = 0; i < count; i++) {
+                        Uri uri = data.getClipData().getItemAt(i).getUri();
+                        String path = utils.filePickerUriResolve(uri);
+                        if(path != null && !pmode_send_images.contains(path)) {
+                            pmode_send_images.add(path);
+                        }
+                    }
+                    mergeAndUpdatePFilesList();
+                }else if(data.getData() != null){
+                    Uri uri = data.getData();
+                    String path = utils.filePickerUriResolve(uri);
+                    if(path != null && !pmode_send_images.contains(path)) {
+                        pmode_send_images.add(path);
+                    }
+                    mergeAndUpdatePFilesList();
                 }
             }
         });
@@ -204,21 +256,8 @@ public class MainActivity extends AppCompatActivity {
             initializeApp();
         }
 
-        // Initialise Root Setter Dialog
-        DialogProperties properties = new DialogProperties();
-        properties.selection_mode = DialogConfigs.SINGLE_MODE;
-        properties.selection_type = DialogConfigs.DIR_SELECT;
-        properties.root = Environment.getExternalStorageDirectory();
-        properties.error_dir = Environment.getExternalStorageDirectory();
-        if (serverRoot.length() > 0) {
-            properties.offset = new File(utils.getParent(serverRoot));
-        } else {
-            properties.offset = Environment.getExternalStorageDirectory();
-        }
-        properties.extensions = null;
-
         IntentFilter filter = new IntentFilter();
-        filter.addAction("service.to.activity.transfer");
+        filter.addAction(Constants.BROADCAST_SERVICE_TO_ACTIVITY);
         updateUIReciver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, final Intent intent) {
@@ -227,7 +266,8 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         };
-        registerReceiver(updateUIReciver, filter);
+        
+        ContextCompat.registerReceiver(this, updateUIReciver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
         FloatingActionButton qrBtn = findViewById(R.id.qrBtn);
         qrBtn.setOnClickListener(v -> toggleQRView());
         hide_logger_btn.setOnClickListener(v -> {
@@ -238,14 +278,10 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onClickImageSelect() {
                 try {
-                    Matisse.from(MainActivity.this)
-                            .choose(MimeType.ofAll(), false)
-                            .countable(true)
-                            .restrictOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED)
-                            .maxSelectable(200)
-                            .theme(R.style.Matisse_Dracula)
-                            .imageEngine(new Glide4Engine())
-                            .forResult(Constants.MATISSE_REQ_CODE);
+                    Intent intent = new Intent(Intent.ACTION_PICK);
+                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                    intent.setDataAndType(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, "image/* video/*");
+                    gallerySelectorActivityResultLauncher.launch(intent);
                 } catch (Exception e) {
                     pushLog(e.toString(), true);
                 }
@@ -254,19 +290,11 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onClickFilesSelect() {
-                DialogProperties properties = new DialogProperties();
-                properties.selection_mode = DialogConfigs.MULTI_MODE;
-                properties.selection_type = DialogConfigs.FILE_SELECT;
-                properties.root = new File(Environment.getExternalStorageDirectory().toString());
-                properties.error_dir = new File(DialogConfigs.DEFAULT_DIR);
-                properties.offset = new File(Environment.getExternalStorageDirectory().toString());
-                FilePickerDialog filesPicker = new FilePickerDialog(MainActivity.this, properties);
-                filesPicker.setTitle("Select files to send");
-                filesPicker.setDialogSelectionListener(files -> {
-                    pmode_send_files = Arrays.asList(files);
-                    mergeAndUpdatePFilesList();
-                });
-                filesPicker.show();
+                Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                i.setType("*/*");
+                i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                mutipleFilesActivityResultLauncher.launch(i);
+                Toast.makeText(MainActivity.this, "Press and hold to select multiple files...", Toast.LENGTH_SHORT).show();
                 fabActionsHandler.hideFab();
             }
         });
@@ -324,6 +352,13 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onStop() {
+        // Clear Glide Cache
+        new Thread(() -> Glide.get(MainActivity.this).clearDiskCache()).start();
+        super.onStop();
+    }
+
+    @Override
     protected void onDestroy() {
         unregisterReceiver(updateUIReciver);
         super.onDestroy();
@@ -364,28 +399,13 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         try {
             IntentFilter filter = new IntentFilter();
-            filter.addAction("service.to.activity.transfer");
+            filter.addAction(Constants.BROADCAST_SERVICE_TO_ACTIVITY);
             registerReceiver(updateUIReciver, filter);
         }catch (Exception e) {
             //Do Nothing!
         }
         privateMode();
         super.onResume();
-    }
-
-    @Override
-    public void onActivityResult(int requestCode, final int resultCode, Intent intent) {
-        switch (requestCode) {
-            case Constants.MATISSE_REQ_CODE:
-                if(resultCode == RESULT_OK) {
-                    pmode_send_images=new ArrayList<>();
-                    List<Uri> mSelected = Matisse.obtainResult(intent);
-                    pmode_send_images=utils.uriListResolve(mSelected);
-                    mergeAndUpdatePFilesList();
-                }
-                break;
-        }
-        super.onActivityResult(requestCode, resultCode, intent);
     }
 
     @Override
@@ -422,7 +442,7 @@ public class MainActivity extends AppCompatActivity {
 
         File f=new File(String.format("/data/data/%s/%s/index.html",getPackageName(),Constants.NEW_DIR));
         if(!f.exists() || Constants.DEBUG) {
-            WebInterfaceSetup webInterfaceSetup=new WebInterfaceSetup(getPackageName(), this);
+            WebInterfaceSetup webInterfaceSetup=new WebInterfaceSetup(getPackageName(), this, this);
             webInterfaceSetup.setupListeners=new WebInterfaceSetup.SetupListeners() {
                 @Override
                 public void onSetupCompeted(boolean status) {
@@ -442,7 +462,7 @@ public class MainActivity extends AppCompatActivity {
                     }
                     try {
                         IntentFilter filter = new IntentFilter();
-                        filter.addAction("service.to.activity.transfer");
+                        filter.addAction(Constants.BROADCAST_SERVICE_TO_ACTIVITY);
                         registerReceiver(updateUIReciver, filter);
                     }catch (Exception e) {
                         //Do Nothing!
@@ -474,7 +494,7 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }
             };
-            webInterfaceSetup.execute();
+            webInterfaceSetup.setup();
         }else{
             askIgnoreBatteryOptimizations();
         }
@@ -667,6 +687,7 @@ public class MainActivity extends AppCompatActivity {
         CheckBox settRMCheck=findViewById(R.id.sett_resMod_checkBox);
         CheckBox settFDCheck=findViewById(R.id.sett_frceDwl_checkBox);
         CheckBox settPMCheck=findViewById(R.id.sett_pMode_checkBox);
+        CheckBox settAppsCheck=findViewById(R.id.sett_apps_checkBox);
         TextView settPort=findViewById(R.id.sett_subtitle8);
         ImageButton settResetRoot = findViewById(R.id.sett_reset_root);
         card1.setOnClickListener(view -> {
@@ -762,10 +783,39 @@ public class MainActivity extends AppCompatActivity {
             builder.show();
         });
         settResetRoot.setOnClickListener(view -> {
-            serverRoot = Environment.getExternalStorageDirectory().toString();
-            utils.saveRoot(serverRoot);
-            pushLog("Server root changed to " + serverRoot, true);
-            settDRoot.setText(serverRoot);
+            if(utils.isExternalStorageMounted()) {
+                String[] options = {"Internal Storage","SD Card"};
+                String[] storages = {Environment.getExternalStorageDirectory().getAbsolutePath(),utils.getSDCardRoot()};
+                AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+                builder.setTitle("Choose Default Storage");
+                builder.setSingleChoiceItems(options, storageChoice, (dialog, which) -> {
+                    storageChoice = which;
+                });
+                builder.setPositiveButton("Set", (dialog, which) -> {
+                    dialog.dismiss();
+                    utils.saveStorage(storages[storageChoice]);
+                    serverRoot = storages[storageChoice];
+                    utils.saveRoot(serverRoot);
+                    pushLog("Server root changed to " + serverRoot, true);
+                    settDRoot.setText(serverRoot);
+                    restartServer();
+                });
+                builder.setNegativeButton("Cancel", (dialog, which) -> {
+                    dialog.dismiss();
+                });
+                builder.show();
+            }else{
+                utils.saveStorage(Environment.getExternalStorageDirectory().getAbsolutePath());
+                serverRoot = Environment.getExternalStorageDirectory().getAbsolutePath();
+                utils.saveRoot(serverRoot);
+                pushLog("Server root changed to " + serverRoot, true);
+                settDRoot.setText(serverRoot);
+                restartServer();
+            }
+        });
+        settAppsCheck.setChecked(utils.loadSetting(Constants.LOAD_APPS));
+        settAppsCheck.setOnCheckedChangeListener((compoundButton, b) -> {
+            utils.saveSetting(Constants.LOAD_APPS,b);
             restartServer();
         });
     }
@@ -805,8 +855,7 @@ public class MainActivity extends AppCompatActivity {
         url="";
         fabActionsHandler.setLabels("0 media selected","0 files selected");
         deviceManager.clearTmp();
-        JunkCleaner junkCleaner=new JunkCleaner();
-        junkCleaner.execute();
+        junkCleaner();
     }
 
     public void pushLog(String log,boolean b) {
@@ -949,8 +998,7 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         fabActionsHandler.setLabels(pmode_send_images.size()+" media selected",pmode_send_files.size()+" files selected");
-        PListWriter pListWriter=new PListWriter();
-        pListWriter.execute();
+        pListWriter();
     }
 
     private void changeUI(int code) {
@@ -998,9 +1046,9 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    public class JunkCleaner extends AsyncTask<Void,Void,Void> {
-        @Override
-        protected Void doInBackground(Void... voids) {
+    private void junkCleaner() {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        executor.execute(() -> {
             File file=new File("/data/data/"+getPackageName()+"/","pFilesList.bin");
             File temp=new File(Environment.getExternalStorageDirectory()+"/ShareX/.temp");
             File cache = new File("/data/data/" + getPackageName() + "/cache");
@@ -1018,14 +1066,16 @@ public class MainActivity extends AppCompatActivity {
             }catch (Exception e) {
                 //Do Nothing...
             }
-            return null;
-        }
+            pmode_send_files.clear();
+            pmode_send_images.clear();
+            pmode_send_final_files.clear();
+        });
     }
 
-    public class PListWriter extends AsyncTask<Void,Void,Void> {
 
-        @Override
-        protected Void doInBackground(Void... voids) {
+    public void pListWriter() {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        executor.execute(() -> {
             File file=new File("/data/data/"+getPackageName()+"/","pFilesList.bin");
             StringBuffer data=new StringBuffer();
             for(String path : pmode_send_final_files) {
@@ -1039,11 +1089,10 @@ public class MainActivity extends AppCompatActivity {
             }catch (Exception e) {
                 //Do Nothing...
             }
-            return null;
-        }
+        });
     }
 
-    public class GenerateQR extends AsyncTask<Void,Void,Void> {
+    public class GenerateQR {
 
         ImageView qr_view;
 
@@ -1051,42 +1100,43 @@ public class MainActivity extends AppCompatActivity {
             this.qr_view = imageView;
         }
 
-        @Override
-        protected Void doInBackground(Void... voids) {
-            Logo logo = new Logo();
-            logo.setBitmap(BitmapFactory.decodeResource(getResources(), R.drawable.ic_logo));
-            logo.setBorderRadius(10);
-            logo.setBorderWidth(10);
-            logo.setScale(0.2f);
-            logo.setClippingRect(new RectF(0, 0, 200, 200));
-            com.github.sumimakito.awesomeqr.option.color.Color color=new com.github.sumimakito.awesomeqr.option.color.Color();
-            color.setLight(Color.parseColor("#ffffff"));
-            color.setDark(Color.parseColor("#000000"));
-            color.setBackground(Color.parseColor("#ffffff"));
-            color.setAuto(false);
-            RenderOption renderOption = new RenderOption();
-            renderOption.setContent(url);
-            renderOption.setSize(800);
-            renderOption.setBorderWidth(20);
-            renderOption.setEcl(ErrorCorrectionLevel.H);
-            renderOption.setPatternScale(1.0f);
-            renderOption.setClearBorder(true);
-            renderOption.setRoundedPatterns(true);
-            renderOption.setColor(color);
-            renderOption.setLogo(logo);
-            try {
-                RenderResult render = AwesomeQrRenderer.render(renderOption);
-                if (render.getBitmap() != null) {
-                    runOnUiThread(() -> {
-                        RoundedBitmapDrawable dr = RoundedBitmapDrawableFactory.create(getResources(),render.getBitmap());
-                        dr.setCornerRadius(15f);
-                        qr_view.setImageDrawable(dr);
-                    });
+        public void execute() {
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            executor.execute(() -> {
+                Logo logo = new Logo();
+                logo.setBitmap(BitmapFactory.decodeResource(getResources(), R.drawable.ic_logo));
+                logo.setBorderRadius(10);
+                logo.setBorderWidth(10);
+                logo.setScale(0.2f);
+                logo.setClippingRect(new RectF(0, 0, 200, 200));
+                com.github.sumimakito.awesomeqr.option.color.Color color=new com.github.sumimakito.awesomeqr.option.color.Color();
+                color.setLight(Color.parseColor("#ffffff"));
+                color.setDark(Color.parseColor("#000000"));
+                color.setBackground(Color.parseColor("#ffffff"));
+                color.setAuto(false);
+                RenderOption renderOption = new RenderOption();
+                renderOption.setContent(url);
+                renderOption.setSize(800);
+                renderOption.setBorderWidth(20);
+                renderOption.setEcl(ErrorCorrectionLevel.H);
+                renderOption.setPatternScale(1.0f);
+                renderOption.setClearBorder(true);
+                renderOption.setRoundedPatterns(true);
+                renderOption.setColor(color);
+                renderOption.setLogo(logo);
+                try {
+                    RenderResult render = AwesomeQrRenderer.render(renderOption);
+                    if (render.getBitmap() != null) {
+                        runOnUiThread(() -> {
+                            RoundedBitmapDrawable dr = RoundedBitmapDrawableFactory.create(getResources(),render.getBitmap());
+                            dr.setCornerRadius(15f);
+                            qr_view.setImageDrawable(dr);
+                        });
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
                 }
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-            return null;
+            });
         }
     }
 
@@ -1098,29 +1148,30 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void showAuthDialog(final String device_id) {
-        DialogInterface.OnClickListener dialogClickListener = (dialog, which) -> {
-            isAuthDialogOpened=false;
-            switch (which) {
-                case DialogInterface.BUTTON_POSITIVE:
-                    deviceManager.addDevice(device_id,Constants.DEVICE_TYPE_TEMP);
-                    break;
-                case DialogInterface.BUTTON_NEGATIVE:
-                    deviceManager.addDevice(device_id,Constants.DEVICE_TYPE_DENIED);
-                    break;
-                case DialogInterface.BUTTON_NEUTRAL:
-                    deviceManager.addDevice(device_id,Constants.DEVICE_TYPE_PERMANENT);
-                    break;
-            }
-            Timer myTimer=new Timer();
-            myTimer.schedule(new TimerTask() {
-                @Override
-                public void run() {
-                    String count = deviceManager.getRemDevices() + " devices remembered";
-                    MainActivity.this.runOnUiThread(() -> settRemDev.setText(count));
-                }
-            },500);
-        };
         if(!isAuthDialogOpened) {
+            DialogInterface.OnClickListener dialogClickListener = (dialog, which) -> {
+                isAuthDialogOpened=false;
+                switch (which) {
+                    case DialogInterface.BUTTON_POSITIVE:
+                        deviceManager.addDevice(device_id,Constants.DEVICE_TYPE_TEMP);
+                        break;
+                    case DialogInterface.BUTTON_NEGATIVE:
+                        deviceManager.addDevice(device_id,Constants.DEVICE_TYPE_DENIED);
+                        break;
+                    case DialogInterface.BUTTON_NEUTRAL:
+                        deviceManager.addDevice(device_id,Constants.DEVICE_TYPE_PERMANENT);
+                        break;
+                }
+                Timer myTimer=new Timer();
+                myTimer.schedule(new TimerTask() {
+                    @Override
+                    public void run() {
+                        String count = deviceManager.getRemDevices() + " devices remembered";
+                        MainActivity.this.runOnUiThread(() -> settRemDev.setText(count));
+                    }
+                },500);
+            };
+
             isAuthDialogOpened=true;
             try {
                 AlertDialog dialog = new AlertDialog.Builder(MainActivity.this)

@@ -114,7 +114,8 @@ public class TransferHistoryAdapter extends RecyclerView.Adapter<TransferHistory
     }
 
     public void updateDataset(ArrayList<HistoryItem> hItems) {
-        historyItems = hItems;
+        historyItems.clear();
+        historyItems.addAll(hItems);
         notifyDataSetChanged();
     }
 
